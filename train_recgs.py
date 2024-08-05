@@ -22,6 +22,10 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+import torch.fft as fft
+from torch import nn
+import cv2
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -33,6 +37,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians)
+
+    num_cams = len(scene.train_cameras[1.0])
+    img_w = scene.train_cameras[1.0][0].image_width
+    img_h = scene.train_cameras[1.0][0].image_height
+    print("Num of Training cams: ", len(scene.train_cameras[1.0]))
+    print("Img Width: ", img_w)
+    print("Img Height: ", img_h)
+
     gaussians.training_setup(opt)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
@@ -41,14 +53,53 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
+    f_size = 4
+
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
 
     viewpoint_stack = None
     ema_loss_for_log = 0.0
-    progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
+    progress_bar = tqdm(range(first_iter, opt.rec_iterations), desc="Training progress")
     first_iter += 1
-    for iteration in range(first_iter, opt.iterations + 1):        
+
+    last_C = torch.zeros(num_cams, 3, img_h, img_w)
+    converge_loss_list = []
+    for iteration in range(first_iter, opt.rec_iterations + 1):
+
+        ###################################################################################################################
+        if iteration%1000==1:
+            err_sum = 0
+            training_cams = scene.getTrainCameras().copy()
+            freq_diffs = []
+            freq_diffs_tensor = torch.zeros(num_cams, 3, img_h, img_w)
+            with torch.no_grad():
+                for idx, view in enumerate(tqdm(training_cams, desc="Rendering progress")):
+                    rendering = render(view, gaussians, pipe, background)["render"]
+                    img_h, img_w = rendering.shape[1],  rendering.shape[2]
+                    gt = view.original_image.clone()
+                    diff: torch.Tensor = gt-rendering
+                    diff_mono = diff
+                    im_fft = fft.fft2(diff_mono.cpu())
+
+                    im_shifted = fft.fftshift(im_fft)
+                    zero_freq = torch.zeros_like(im_shifted, dtype=torch.cfloat)
+                    # print(zero_freq.shape)
+                    # exit()
+                    zero_freq[:, int(img_h/2-f_size):int(img_h/2+f_size+1), int(img_w/2-f_size):int(img_w/2+f_size+1)] = im_shifted[:, int(img_h/2-f_size):int(img_h/2+f_size+1), int(img_w/2-f_size):int(img_w/2+f_size+1)]
+                    im_fft2 = fft.ifftshift(zero_freq)
+                    fdiff = fft.ifft2(im_fft2).real
+
+                    freq_diffs.append(fdiff)
+                    freq_diffs_tensor[idx] = torch.clone(fdiff)
+
+                print("iteration: ", iteration)
+                converge_loss = nn.functional.l1_loss(last_C, freq_diffs_tensor).item()
+                print("Loss: ", converge_loss)
+                converge_loss_list.append(converge_loss)
+                last_C = torch.clone(freq_diffs_tensor)
+
+        ###################################################################################################################
         if network_gui.conn == None:
             network_gui.try_connect()
         while network_gui.conn != None:
@@ -59,7 +110,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer)["render"]
                     net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
                 network_gui.send(net_image_bytes, dataset.source_path)
-                if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
+                if do_training and ((iteration < int(opt.rec_iterations)) or not keep_alive):
                     break
             except Exception as e:
                 network_gui.conn = None
@@ -76,6 +127,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+        # print(viewpoint_cam.uid)
+
+        cam_id = viewpoint_cam.uid
 
         # Render
         if (iteration - 1) == debug_from:
@@ -86,9 +140,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
+
         # Loss
-        gt_image = viewpoint_cam.original_image.cuda()
+        gt_image = viewpoint_cam.original_image.cuda()-freq_diffs[cam_id].cuda()
         Ll1 = l1_loss(image, gt_image)
+        # loss = Ll1
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         loss.backward()
 
@@ -100,7 +156,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration % 10 == 0:
                 progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
                 progress_bar.update(10)
-            if iteration == opt.iterations:
+            if iteration == opt.rec_iterations:
                 progress_bar.close()
 
             # Log and save
@@ -123,14 +179,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     gaussians.reset_opacity()
 
             # Optimizer step
-            if iteration < opt.iterations:
+            if iteration < opt.rec_iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-
+    print(converge_loss_list)
 def prepare_output_and_logger(args):    
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
@@ -200,13 +256,13 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000, 100_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000, 100_000])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[30_000, 70_000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[30_000, 100_000])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
-    args.save_iterations.append(args.iterations)
+    args.save_iterations.append(args.rec_iterations)
     
     print("Optimizing " + args.model_path)
 
