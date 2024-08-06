@@ -25,6 +25,7 @@ to do
 conda activate gaussian_splatting
 python3 train.py -s /data/xxxxxx    # train a vanila 3DGS first
 python3 train_recgs.py -s /data/xxxxxx --start_checkpoint output/xxxxxx/chkpnt30000.pth
+python3 render_recgs.py -s /data/xxxxxx -m output/xxxxxx
 ```
 
 ### Citation 
