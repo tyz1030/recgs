@@ -17,9 +17,15 @@ git clone https://github.com/tyz1030/darkgs.git --recursive
 ```
 Conda environment is the same with vanilla Gaussian Splatting [(original repo)](https://github.com/graphdeco-inria/gaussian-splatting.git)
 
+### data
+to do
 
-Please download our example data [here](https://drive.google.com/file/d/1GGUvvpbk33GglKvJaDSm5Do5jMa7Jnrn/view?usp=sharing).
-
+### Quickstart
+```
+conda activate gaussian_splatting
+python3 train.py -s /data/xxxxxx    # train a vanila 3DGS first
+python3 train_recgs.py -s /data/xxxxxx --start_checkpoint output/xxxxxx/chkpnt30000.pth
+```
 
 ### Citation 
 [arXiv](https://www.arxiv.org/abs/2407.10318)
