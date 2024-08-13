@@ -13,7 +13,7 @@ git clone git@github.com:tyz1030/recgs.git --recursive
 ```
 or
 ```
-git clone https://github.com/tyz1030/darkgs.git --recursive
+git clone https://github.com/tyz1030/recgs.git --recursive
 ```
 Conda environment is the same with vanilla Gaussian Splatting [(original repo)](https://github.com/graphdeco-inria/gaussian-splatting.git)
 
