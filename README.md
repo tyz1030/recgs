@@ -31,13 +31,14 @@ python3 render_recgs.py -s /data/xxxxxx -m output/xxxxxx
 ### Citation 
 [arXiv](https://www.arxiv.org/abs/2407.10318)
 ```
-@misc{zhang2024recgs,
-      title={RecGS: Removing Water Caustic with Recurrent Gaussian Splatting}, 
-      author={Tianyi Zhang and Weiming Zhi and Kaining Huang and Joshua Mangelson and Corina Barbalata and Matthew Johnson-Roberson},
-      year={2024},
-      eprint={2407.10318},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2407.10318}, 
-}
+@ARTICLE{zhang2025recgs,
+  author={Zhang, Tianyi and Zhi, Weiming and Meyers, Braden and Durrant, Nelson and Huang, Kaining and Mangelson, Joshua and Barbalata, Corina and Johnson-Roberson, Matthew},
+  journal={IEEE Robotics and Automation Letters}, 
+  title={RecGS: Removing Water Caustic With Recurrent Gaussian Splatting}, 
+  year={2025},
+  volume={10},
+  number={1},
+  pages={668-675},
+  keywords={Three-dimensional displays;Cameras;Sea floor;Filtering;Neural radiance field;Lighting;Robot vision systems;Solid modeling;Robots;Rendering (computer graphics);Deep learning for visual perception;marine robotics},
+  doi={10.1109/LRA.2024.3511418}}
 ```
